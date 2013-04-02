@@ -74,12 +74,16 @@ def run_io(io)
     io.args.first
   when :bind
     k, f = io.args
+    assert_type(k, IOAction)
+    assert_type(f, Proc)
     r = run_io(k)
     run_io(f.call(r))
   when :getChar
     STDIN.read(1)
   when :putChar
-    STDOUT.print(io.args[0].chr)
+    c = io.args.first
+    assert_type(c, Integer)
+    STDOUT.print(c.chr)
     nil
   end
 end
