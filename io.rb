@@ -1,91 +1,114 @@
-# zero ruby IO happens here:
+def assert_type(where, x, klass)
+  return x if !klass || x.kind_of?(klass)
 
-def assert_type(x, klass)
-  return if x.kind_of?(klass)
-
-  raise TypeError, "expected #{klass}, got #{x.inspect} :: #{x.class}"
+  raise TypeError, "in #{where}: expected #{klass}, got #{x.inspect} :: #{x.class}"
 end
 
-class IOAction < Struct.new(:primop, :args)
-end
-
-def getChar()
-  IOAction.new(:getChar, [])
-end
-
-def putChar(c)
-  assert_type(c, Integer)
-  IOAction.new(:putChar, [c])
-end
-
-def bind(k, f) # k >>= f
-  assert_type(k, IOAction)
-  assert_type(f, Proc)
-  IOAction.new(:bind, [k, f])
-end
-
-def return_(x)
-  IOAction.new(:return, [x])
-end
-
-def andThen(k1, k2) # k1 >> k2
-  assert_type(k1, IOAction)
-  assert_type(k2, IOAction)
-  bind(k1, lambda { |_| k2 })
-end
-
-def putStrLn(s)
-  assert_type(s, String)
-  if s.empty?
-    putChar("\n".ord)
-  else
-    rest = s.dup
-    first = rest.slice!(0)
-    andThen(putChar(first.ord), putStrLn(rest))
+def assert_arg_types(where, args, arg_types)
+  arg_types.each_index do |i|
+    assert_type("#{where} arg #{i+1}", args[i], arg_types[i])
   end
 end
 
-def getLine()
+class Char < Struct.new(:ord)
+  def to_s()
+    ord.chr
+  end
+end
+
+class IOPrim < Struct.new(:tag, :result_type, :arg_types, :handler)
+  @ops = {}
+  def self.register(tag, *arg_types, result_type, &handler)
+    arg_types ||= []
+    op = @ops[tag] = IOPrim.new(tag, result_type, arg_types, handler)
+    Kernel.send(:define_method, tag) do |*args|
+      assert_arg_types(tag.to_s, args, arg_types)
+      IOAction.new(op, args)
+    end
+  end
+
+  def perform(*args)
+    r = self.handler.call(*args)
+    assert_type(self.tag.to_s + " result", r, self.result_type)
+  end
+
+  def inspect
+    self.tag.to_s
+  end
+  alias to_s inspect
+end
+
+class IOAction < Struct.new(:primop, :args)
+  def perform()
+    primop.perform(*self.args)
+  end
+
+  def inspect
+    "#{self.primop}(#{args.map(&:inspect).join(", ")})"
+  end
+  alias to_s inspect
+end
+
+IOPrim.register(:getChar, Char)           {     Char.new(STDIN.read(1).ord) }
+IOPrim.register(:putChar, Char, NilClass) { |c| STDOUT.print(c.to_s)        }
+
+IOPrim.register(:return_, nil, nil) { |x| x }
+IOPrim.register(:bind, IOAction, Proc, nil) do |k, f|
+  f.call(k.perform).perform
+end
+
+END { $main.perform() }
+
+def def_fun(name, *arg_types, ret_type, &body)
+  arg_types ||= []
+  Kernel.send(:define_method, name) do |*args|
+    assert_arg_types(name.to_s, args, arg_types)
+    r = body.call(*args)
+    assert_type(name.to_s + " result", r, ret_type)
+  end
+end
+
+def fn(*arg_types, ret_type, &body)
+  pos = caller[0]
+  lambda do |*args|
+    assert_arg_types("fn #{pos}", args, arg_types)
+    assert_type("fn #{pos} result", body.call(*args), ret_type)
+  end
+end
+
+## user code, no actual IO happens
+
+def_fun(:andThen, IOAction, IOAction, IOAction) do |k1, k2| # k1 >> k2
+  bind(k1, fn(nil, IOAction) { |_| k2 })
+end
+
+def_fun(:putStrLn, String, IOAction) do |s|
+  if s.empty?
+    putChar(Char.new("\n".ord))
+  else
+    rest = s.dup
+    first = rest.slice!(0)
+    andThen(putChar(Char.new(first.ord)), putStrLn(rest))
+  end
+end
+
+def_fun(:getLine, IOAction) do
   bind(getChar(),
-       lambda do |c|
-         if c == ?\n
-           return_(c)
+       fn(Char, IOAction) do |c|
+         if c.ord == "\n".ord
+           return_(c.to_s)
          else
            bind(getLine(),
-                lambda do |line|
-                  res = c + line.chomp
+                fn(String, IOAction) do |line|
+                  res = c.to_s + line.chomp
                   return_(res)
                 end)
          end
        end)
 end
 
-main = andThen(putStrLn("Hello! What's your name??"),
-               bind(getLine(),
-                    lambda { |x| putStrLn("WELL HELLO #{x.upcase}!!!") }))
-
-## END USER CODE ##
-# actual IO happens here
-
-def run_io(io)
-  assert_type(io, IOAction)
-  case io.primop
-  when :return
-    io.args.first
-  when :bind
-    k, f = io.args
-    assert_type(k, IOAction)
-    assert_type(f, Proc)
-    r = run_io(k)
-    run_io(f.call(r))
-  when :getChar
-    STDIN.read(1)
-  when :putChar
-    c = io.args.first
-    assert_type(c, Integer)
-    STDOUT.print(c.chr)
-    nil
-  end
-end
-
-run_io(main)
+$main = andThen(putStrLn("Hello! What's your name??"),
+                bind(getLine(),
+                     fn(String, IOAction) do |x|
+                      putStrLn("WELL HELLO #{x.upcase}!!!")
+                     end))
