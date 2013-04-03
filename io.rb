@@ -59,7 +59,7 @@ end
 
 END { $main.perform() }
 
-def def_fun(name, *arg_types, ret_type, &body)
+def def_fn(name, *arg_types, ret_type, &body)
   arg_types ||= []
   Kernel.send(:define_method, name) do |*args|
     assert_arg_types(name.to_s, args, arg_types)
@@ -78,11 +78,11 @@ end
 
 ## user code, no actual IO happens
 
-def_fun(:andThen, IOAction, IOAction, IOAction) do |k1, k2| # k1 >> k2
+def_fn(:andThen, IOAction, IOAction, IOAction) do |k1, k2| # k1 >> k2
   bind(k1, fn(nil, IOAction) { |_| k2 })
 end
 
-def_fun(:putStrLn, String, IOAction) do |s|
+def_fn(:putStrLn, String, IOAction) do |s|
   if s.empty?
     putChar(Char.new("\n".ord))
   else
@@ -92,7 +92,7 @@ def_fun(:putStrLn, String, IOAction) do |s|
   end
 end
 
-def_fun(:getLine, IOAction) do
+def_fn(:getLine, IOAction) do
   bind(getChar(),
        fn(Char, IOAction) do |c|
          if c.ord == "\n".ord
